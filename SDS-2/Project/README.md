@@ -2,7 +2,9 @@
 
 My project concerns the prediction, by means of Bayesian inference methods, of the PM10 levels in the air in the city where there is no such detector, analyzing what happens in nearby cities.
 
+# Dataset
 I used a huge [dataset](https://aqicn.org/data-platform/covid19/) with many air quality records from around the world. 
+You have to download 5 dataset: one dor 2020 and the other 4 for the 2019
 
 I focused on Italy from the beginning of 2019 up to July 2019.
 

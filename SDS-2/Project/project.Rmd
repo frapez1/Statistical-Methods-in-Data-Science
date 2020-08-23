@@ -1,0 +1,829 @@
+---
+title: "Pm10 in Italy"
+author: "Francesco Pezone"
+output:  
+  html_document:
+    toc: True
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+
+# Import everything 
+```{r, warning=FALSE, message=FALSE}
+library(ggplot2)
+library(dplyr)    # for %>%
+library(sets)
+library(R2jags)
+library(data.table)
+library(gtools)
+library(corrplot)
+library(RColorBrewer)
+library(MASS)
+library(fitdistrplus)
+library(markovchain)
+library(caret)
+library(data.table)
+
+# just to speed up since I can read the preprocessed dataset
+# I NEVER PREPROCESSED THE DATA
+eval_variable <- TRUE
+```
+
+
+
+# Import the dataset
+
+```{r, eval=eval_variable}
+# dataset from 'https://aqicn.org/data-platform/covid19/'
+
+file_path <- list.files("C:/Users/franc/Desktop/Data_science/SDS_2/SDS_2_Homeworks/project/project_SDS2", 
+                        pattern = "*.csv", 
+                        full.names = TRUE)
+
+headers <- read.csv(file_path[1], skip = 4, header = F, nrows = 1, as.is = T)
+df <- read.csv(file_path[1], header = FALSE, skip = 5)
+colnames(df) <- headers
+
+for (i in 2:5){
+  df_new <- read.csv(file_path[i], header = FALSE, skip = 5)
+  colnames(df_new) <- headers
+  df <- rbind(df, df_new)
+}
+# df_new <- 0
+# order by date
+df <- df[order(df$Date),]
+
+# convert as data
+df$Date <- as.Date(df$Date)
+
+# select only the median
+df_median <- subset(df, select = c(Date,Country,City,Specie,median))
+
+# df <- 0
+
+head(df_median)
+```
+
+
+# Select only pm10 in Italy 
+
+```{r, eval=eval_variable}
+
+
+df_it <- df_median[df_median$Country == 'IT',]
+# df_median <- 0
+a <- table(unlist(df_it$City))
+a[a>0]
+
+# select only pm10
+df_it_pm10 <- df_it[df_it$Specie == 'pm10',]
+
+city_name <- c("Bologna", "Brescia", "Florence", "Livorno", "Milan", "Modena", "Naples", "Parma", "Prato", "Rome", "Trieste")
+# 
+date <- df_it_pm10$Date[!duplicated(df_it_pm10$Date)]
+
+
+df_it_new <- setNames(data.frame(matrix(ncol = length(city_name), nrow = 0)), city_name)
+for (i in 1:length(date)){
+  df_day <- df_it_pm10[df_it_pm10$Date == date[i],c('City','median')]
+  df_day <- df_day[order(df_day$City),]
+  
+  df_day <- df_day[!duplicated(df_day$City),]
+  
+  
+  rownames(df_day) <- df_day$City
+  df_day$City <- NULL
+  df_day_transpose <- transpose(df_day)
+  colnames(df_day_transpose) <- rownames(df_day)
+  rownames(df_day_transpose) <- date[i]
+  df_it_new <- smartbind(df_it_new, df_day_transpose)
+}
+rownames(df_it_new) <- date
+summary(df_it_new)
+
+# i'm going to remove Naples since there are a lot of NA
+df_it_new <- df_it_new[ -c(11) ]
+
+# remove rows with at least a NA
+df_it_new <- df_it_new[complete.cases(df_it_new), ]
+summary(df_it_new)
+
+# normalize by columns
+preproc2 <- preProcess(df_it_new, method=c("range"))
+df_it_new <- predict(preproc2, df_it_new)
+df_it_new <- df_it_new*0.98+0.01
+summary(df_it_new)
+
+head(df_it_new)
+# to save it
+# write.csv(df_it_new,"C:/Users/franc/Desktop/Data_science/SDS_2/SDS_2_Homeworks/project/project_SDS2/df_it_new.csv", row.names = TRUE)
+
+```
+
+
+```{r,eval=  !eval_variable}
+# after saving df_it_new I'm going to read directly it
+df_it_new <- read.csv("C:/Users/franc/Desktop/Data_science/SDS_2/SDS_2_Homeworks/project/project_SDS2/df_it_new.csv", header = TRUE,row.names=1)
+summary(df_it_new)
+
+head(df_it_new)
+```
+
+
+
+# Illustration of the dataset {.tabset .tabset-fade .tabset-pills}
+
+
+## Timeseries plot {.tabset .tabset-fade .tabset-pills}
+
+```{r, results = "asis", warning=FALSE, message=FALSE}
+City_name_sorted <- c("Bologna","Brescia","Florence","Livorno","Milan","Modena", "Parma","Prato","Rome","Trieste" )
+par(mfrow=c(1,1))
+
+for (i in 1:length(City_name_sorted)) {
+  cat(sprintf('\n### %s \n' ,City_name_sorted[i]))
+  plot(df_it_new[,i], main = City_name_sorted[i], xlab= 'days', ylab = 'pm10', pch = 20, col = 'blue', cex = 1)
+  cat('\n')
+}
+
+
+```
+
+
+## Histograms {.tabset .tabset-fade .tabset-pills}
+
+```{r, results = "asis", warning=FALSE, message=FALSE}
+City_name_sorted <- c("Bologna","Brescia","Florence","Livorno","Milan","Modena", "Parma","Prato","Rome","Trieste" )
+# thanks to Cullen and Frey
+distr_per_city <- c('beta','beta','gamma','beta','beta','beta','beta','gamma','gamma','gamma')
+par(mfrow=c(1,2))
+
+
+fitDISTR <- function(data, distr){
+  if (distr == 'beta'){
+    a <- fitdistr(data, densfun = 'beta',list(shape1=1, shape2=5))
+  }
+  else {
+    a <- fitdistr(data, densfun = distr)
+  }
+  return(a)
+}
+
+for (i in 1:length(City_name_sorted)){
+  cat(sprintf('\n### %s \n' ,City_name_sorted[i]))
+  hist(df_it_new[,i], prob=T, xlab = 'pm10', main = paste(City_name_sorted[i],'(',distr_per_city[i],')'), nclass = 20)
+  #lines(density(df_it_new[,i]), col='red', lwd=2)
+  a <- fitDISTR(df_it_new[,i],distr_per_city[i])
+  #b <- fitdistr(df_it_new[,i], densfun = 'beta',list(shape1=1, shape2=5))
+
+  curve((distr_per_city[i] == 'beta')*dbeta(x, shape1 =a$estimate[1], shape2=a$estimate[2])+
+        (distr_per_city[i] == 'gamma')*dgamma(x, shape =a$estimate[1], rate=a$estimate[2]), col='blue', lwd=3, add=TRUE)
+  #curve(dbeta(x, shape1 =b$estimate[1], shape2=b$estimate[2]), col='red', lwd=3, add=TRUE)
+
+  descdist(df_it_new[,i], discrete = FALSE,boot=1000)
+  cat('\n')
+  }
+
+```
+
+## Correlation
+
+```{r, warning=FALSE, message=FALSE}
+par(mfrow=c(1,1))
+M <-cor(df_it_new)
+col <- colorRampPalette(c("#BB4444", "#FFFFFF", "#FFFFFF", "#FFFFFF", "#4477AA"))
+corrplot(M, method="color", col=col(100),  
+         type="upper", order="hclust", 
+         addCoef.col = "black", # Add coefficient of correlation
+         tl.col="black", tl.srt=45, #Text label color and rotation
+         # Combine with significance
+         #p.mat = p.mat, 
+         #sig.level = 0.41, 
+         #insig = "blank", 
+         # hide correlation coefficient on the principal diagonal
+         diag=FALSE 
+)
+```
+
+
+## Autocorrelation {.tabset .tabset-fade .tabset-pills}
+
+```{r, results = "asis", warning=FALSE, message=FALSE}
+City_name_sorted <- c("Bologna","Brescia","Florence","Livorno","Milan","Modena", "Parma","Prato","Rome","Trieste" )
+par(mfrow=c(1,1))
+
+for (i in 1:length(City_name_sorted)){
+  cat(sprintf('\n### %s \n' ,City_name_sorted[i]))
+  AutoCorrelation <- acf(df_it_new[,i], plot = FALSE)
+  plot(AutoCorrelation, main = City_name_sorted[i])
+  cat('\n')
+}
+
+```
+
+
+# Inferencial models {.tabset .tabset-fade .tabset-pills}
+
+The main idea is to try to predict what will happen in Modena knowing what is going on in Bologna and Parma.
+
+## Statistical approach
+```{r, message=FALSE, warning=FALSE}
+
+# linear fit
+linear_fit <- with(df_it_new, lm(Modena ~ Bologna + Parma, df_it_new))$coefficients
+
+
+# plot difference
+plot(density(linear_fit[1] + linear_fit[2]*df_it_new$Bologna + linear_fit[3]*df_it_new$Parma - df_it_new$Modena), pch = 20, col = 'blue', cex = 1 ,xlab = 'difference between fit and Modena', main = 'Distriburion of the difference')
+
+# plot timeseries modena and fit
+plot(linear_fit[1] + linear_fit[2]*df_it_new$Bologna + linear_fit[3]*df_it_new$Parma,df_it_new$Modena,   pch = 20, col = 'blue', cex = 1 , ylab = 'Modena', xlab = 'fit from BO and PR')
+
+# correlation
+cor(linear_fit[1] + linear_fit[2]*df_it_new$Bologna + linear_fit[3]*df_it_new$Parma,df_it_new$Modena)
+
+```
+
+## Jags (linear model normal)
+
+```{r, message=FALSE}
+set.seed(15944)
+cat(
+  "model {
+  #model
+  for (i in 1:N){
+    return[i] ~ dnorm(mu[i], tau)
+    mu[i] <- b0 + b1*Bologna[i] + b2*Parma[i]
+  }
+  
+  #priors
+  b0 ~ dnorm( 0 , 1.0E-12 )
+  b1 ~ dnorm( 0 , 1.0E-12 )
+  b2 ~ dnorm( 0 , 1.0E-12 )
+  tau ~ dgamma(0.001, 0.001)
+  # t0 ~ dnorm(0, 0.01)
+  # phi <- exp(t0)
+  }", file="linear.jag"
+)
+# Define data structure
+
+dat1 = list(return = df_it_new$Modena, Bologna=df_it_new$Bologna, Parma=df_it_new$Parma, N=nrow(df_it_new))
+# lapply(dat1,summary)
+
+# Init list parameters for JAGS
+
+inits<-list(
+  list(b0=1.01, b1=1.01, b2=1.01, tau = 1),
+  list(b0=0.9, b1=0.9, b2=0.9, tau= 0.5)        
+)
+parameters<-c("b0", "b1", "b2", "tau")
+
+# RUN JAGS
+linear_model <- jags(data = dat1,  # DATA
+                     inits = inits,  # MODEL
+                     parameters.to.save = parameters,
+                     model.file = "linear.jag",
+                     n.chains = 2,
+                     n.iter = 5000,
+                     n.burnin = 2000,
+                     n.thin = 10)
+
+linear_model
+
+chainArray<-linear_model$BUGSoutput$sims.array
+bayesplot::mcmc_acf(chainArray)
+
+
+# Credible interval (HPD)
+
+chainMat <- linear_model$BUGSoutput$sims.matrix
+beta.HPD.jags <- coda::HPDinterval(as.mcmc(chainMat))
+beta.HPD.jags
+
+# plot timeseries modena and fit
+B0 <- mean(linear_model$BUGSoutput$sims.matrix[,1])
+B1 <- mean(linear_model$BUGSoutput$sims.matrix[,2])
+B2 <- mean(linear_model$BUGSoutput$sims.matrix[,3])
+
+plot(B0 + B1*df_it_new$Bologna + B2*df_it_new$Parma,df_it_new$Modena,   pch = 20, col = 'blue', cex = 1 , ylab = 'Modena', xlab = 'fit from BO and PR')
+
+# correlation
+cor(B0 + B1*df_it_new$Bologna + B2*df_it_new$Parma, df_it_new$Modena)
+
+```
+
+
+
+
+
+# Dealing with missing values
+
+The main problem of this dataset is the presence of some missing values and repeted values, in particular if I consider the whole italian dataset, of the median, whith all the values (pm10, pm25, co2,...), knowing that there are 11 cities and the dataset goes from 2018-12-31 to 2020-07-02 (550 days), the percentage of values compared to 6050 is: 
+
+```{r, eval=eval_variable}
+# split the dataset  by species
+splitted_it <- split(df_it, df_it$Specie)
+names_splitted <- attributes(splitted_it)
+
+optimal_number <- 550*11 #6050
+
+# for each one evaluate the number of missing values per city
+percentage <- as.data.frame((table(df_it$Specie)))
+percentage$Freq <- percentage$Freq/optimal_number
+
+percentage[percentage$Freq != 0,]
+
+```
+
+The fact that in some fields there are more values than 6050 do not imply that there are no missing values but only that there are repeted values, the same for the contrary.
+
+The idea is to consider humidity, pm25, pressure and temperature to predict the value of pm10 in Modena.
+To do this I have to deal with missing values via Gibbs sampling.
+
+
+
+## Build dataset
+
+First of all let's build the dataset.
+
+```{r, eval=eval_variable, warning=FALSE, message=FALSE}
+# select only modena
+Modena <- df_it[df_it$City == 'Modena',]
+
+All_species <- c("co","humidity","o3","pm25","so2","wind-gust","no2","pm10","pressure","temperature","wind-speed","dew","wind gust","wind speed")
+All_species <- sort(All_species)
+
+
+Modena_species <- c('pm10', 'humidity', 'pm25', 'pressure', 'temperature')
+
+date <- df_it$Date[!duplicated(df_it$Date)]
+
+Modena_new <- setNames(data.frame(matrix(ncol = length(All_species), nrow = 0)), All_species)
+for (i in 1:length(date)){
+  
+  if (sum(Modena$Date == date[i]) == 0) {
+    Modena_day_transpose <- setNames(data.frame(matrix(ncol = length(All_species), nrow = 1)), All_species)
+    Modena_new <- smartbind(Modena_new, Modena_day_transpose)
+  }
+  else{
+    Modena_day <- Modena[Modena$Date == date[i],c('Specie','median')]
+    Modena_day <- Modena_day[order(Modena_day$Specie),]
+    
+    
+    Modena_day <- Modena_day[!duplicated(Modena_day$Specie),]
+    
+    rownames(Modena_day) <- Modena_day$Specie
+    Modena_day$Specie <- NULL
+    Modena_day_transpose <- transpose(Modena_day)
+    colnames(Modena_day_transpose) <- rownames(Modena_day)
+    rownames(Modena_day_transpose) <- date[i]
+    Modena_new <- smartbind(Modena_new, Modena_day_transpose)
+  }
+}
+rownames(Modena_new) <- date
+Modena_new <- Modena_new[Modena_species]
+
+
+# convert in numeric
+cols <- c(1, 2, 3, 4, 5);    
+Modena_new[,cols] <-  apply(Modena_new[,cols], 2,
+                            as.numeric);
+
+summary(Modena_new)
+
+
+# normalize everything
+preproc2 <- preProcess(Modena_new, method=c("range"))
+Modena_new <- predict(preproc2, Modena_new)
+Modena_new<- Modena_new*0.98+0.01
+summary(Modena_new)
+
+head(Modena_new)
+
+# to save it
+# write.csv(Modena_new,"C:/Users/franc/Desktop/Data_science/SDS_2/SDS_2_Homeworks/project/project_SDS2/Modena_new.csv", row.names = TRUE)
+
+```
+
+
+```{r, eval= !eval_variable}
+# after saving df_it_new I'm going to read directly it
+Modena_new <- read.csv("C:/Users/franc/Desktop/Data_science/SDS_2/SDS_2_Homeworks/project/project_SDS2/Modena_new.csv", header = TRUE,row.names=1)
+summary(Modena_new)
+head(Modena_new)
+```
+
+## Illustration of the dataset whitout NA {.tabset .tabset-fade .tabset-pills}
+
+```{r}
+# remove NA's
+Modena_new_nona <-  Modena_new[complete.cases(Modena_new), ]
+
+```
+
+### Timeseries plot {.tabset .tabset-fade .tabset-pills}
+
+```{r, results = "asis", warning=FALSE, message=FALSE}
+Modena_species <- c('pm10', 'humidity', 'pm25', 'pressure', 'temperature')
+
+par(mfrow=c(1,1))
+
+for (i in 1:length(Modena_species)) {
+  cat(sprintf('\n#### %s \n' ,Modena_species[i]))
+  plot(Modena_new_nona[,i], main = Modena_species[i], xlab= 'days', ylab = 'pm10', pch = 20, col = 'blue', cex = 1)
+  cat('\n')
+}
+
+
+```
+
+
+### Histograms {.tabset .tabset-fade .tabset-pills}
+
+```{r, results = "asis", warning=FALSE, message=FALSE}
+
+Modena_species <- c('pm10', 'humidity', 'pm25', 'pressure', 'temperature')
+
+# thanks to Cullen and Frey
+distr_per_specie <- c('beta','beta','beta','normal','beta')
+
+par(mfrow=c(1,2))
+
+
+fitDISTR <- function(data, distr){
+  if (distr == 'beta'){
+    a <- fitdistr(data, densfun = 'beta',list(shape1=1, shape2=5))
+  }
+  else {
+    a <- fitdistr(data, densfun = distr)
+  }
+  
+  return(a)
+}
+
+for (i in 1:length(Modena_species)){
+  cat(sprintf('\n#### %s \n' ,Modena_species[i]))
+  hist(Modena_new_nona[,i], prob=T, xlab = 'pm10', main = paste(Modena_species[i],'(',distr_per_specie[i],')'), nclass = 20)
+  # #lines(density(df_it_new[,i]), col='red', lwd=2)
+  a <- fitDISTR(Modena_new_nona[,i],distr_per_specie[i])
+  # #b <- fitdistr(df_it_new[,i], densfun = 'beta',list(shape1=1, shape2=5))
+  # 
+  curve((distr_per_specie[i] == 'beta')*dbeta(x, shape1 =a$estimate[1], shape2=a$estimate[2])+
+        (distr_per_specie[i] == 'normal')*dnorm(x, a$estimate[1], a$estimate[2]), col='blue', lwd=3, add=TRUE)
+  # #curve(dbeta(x, shape1 =b$estimate[1], shape2=b$estimate[2]), col='red', lwd=3, add=TRUE)
+
+  descdist(Modena_new_nona[,i], discrete = FALSE,boot=1000)
+  cat('\n')
+  }
+
+```
+
+### Correlation
+
+```{r, warning=FALSE, message=FALSE}
+par(mfrow=c(1,1))
+M <-cor(Modena_new_nona)
+col <- colorRampPalette(c("#BB4444", "#EE9988", "#FFFFFF", "#77AADD", "#4477AA"))
+corrplot(M, method="color", col=col(100),  
+         type="upper", order="hclust", 
+         addCoef.col = "black", # Add coefficient of correlation
+         tl.col="black", tl.srt=45, #Text label color and rotation
+         # Combine with significance
+         #p.mat = p.mat, 
+         #sig.level = 0.41, 
+         #insig = "blank", 
+         # hide correlation coefficient on the principal diagonal
+         diag=FALSE 
+)
+```
+
+
+### Autocorrelation {.tabset .tabset-fade .tabset-pills}
+
+```{r, results = "asis", warning=FALSE, message=FALSE}
+Modena_species <- c('pm10', 'humidity', 'pm25', 'pressure', 'temperature')
+par(mfrow=c(1,1))
+
+for (i in 1:length(Modena_species)){
+  cat(sprintf('\n#### %s \n' ,Modena_species[i]))
+  AutoCorrelation <- acf(Modena_new_nona[,i], plot = FALSE)
+  plot(AutoCorrelation, main = Modena_species[i])
+  cat('\n')
+}
+
+```
+
+## Missing values sampling via Metropolis Hasting
+
+Now I have to generate the missing values: the idea is to use a Gibb sampling algorithm to do it.
+
+
+There are two possible distribution for the data given the parameters, Beta and Normal; for both I'm going to call the two parameters, shape1 and shape2 for Beta, mean and variance for Normal, with the manes par_1 and par_2.
+
+```{r, warning=FALSE, message=FALSE}
+
+# prova credente
+
+par_1_d <- function(par_1){
+  dnorm(par_1, prior_mean_par_1, prior_std_par_1)
+}
+
+par_2_d <- function(par_2){
+  dnorm(par_2, prior_mean_par_2, prior_std_par_2)
+}
+
+
+Y_i <- function(y, par_1, par_2, type_d){
+  if (type_d == 'beta'){
+    dbeta(y, par_1, par_2)
+  }
+  else{
+    dnorm(y, par_1, par_2)
+  }
+}
+
+
+lik <- function(Y_obs, par_1, par_2, type_d){
+  if (type_d == 'beta'){
+    length(Y_obs)*log(beta(par_1, par_2)) + (par_1 - 1)* sum(log(Y_obs))
+    + (par_2 - 1)* sum(log(1- Y_obs))
+  }
+  else{
+   - (1/(2*par_2^2))*sum((Y_obs-par_1)^2)
+  }
+}
+
+
+
+initial_param <- function(type_d){
+  if (type_d == 'normal'){
+    # normal
+    prior_mean_par_1 <- mean(Y_obs)
+    prior_mean_par_2 <- sd(Y_obs)
+    return(c(prior_mean_par_1,prior_mean_par_2))
+  }
+  else{
+    # beta
+    return(fitdistr(Y_obs, densfun = 'beta',list(shape1=1, shape2=5))$estimate)
+  }
+}
+
+Modena_new_imput <- copy(Modena_new)
+
+for (col in 1:length(Modena_species)){
+  Y_obs <- Modena_new_nona[,col]
+  type_d <- distr_per_specie[col]
+  prior_std_par_1 <- 0.01
+  prior_std_par_2 <- 0.01    
+  mu <- initial_param(type_d)
+  prior_mean_par_1 <- mu[1] 
+  prior_mean_par_2 <- mu[2]
+  
+  
+  n_sim_aux <- length(Modena_new_imput[,col]) #total lenght
+  
+  missing_prediction <- rep(NA, n_sim_aux)
+  par_1_seq <- rep(NA, n_sim_aux)
+  par_2_seq <- rep(NA, n_sim_aux)
+  
+  missing_prediction[1] <- Y_obs[1]
+  par_1_seq[1] <- prior_mean_par_1
+  par_2_seq[1] <- prior_mean_par_2
+    
+  for (i in 2:n_sim_aux){
+    proposed_par_1 <- rnorm(1, prior_mean_par_1, prior_std_par_1)
+    proposed_par_2 <- rnorm(1, prior_mean_par_2, prior_std_par_2)
+    
+    N_pos <- exp(lik(Y_obs, proposed_par_1, proposed_par_2,type_d))*par_1_d(proposed_par_1)*par_2_d(proposed_par_2)
+    
+    D_pos <- exp(lik(Y_obs, par_1_seq[i-1], par_2_seq[i-1],type_d))*par_1_d(par_1_seq[i-1])*par_2_d(par_2_seq[i-1])
+    
+    N_pr <- dnorm(par_1_seq[i-1], prior_mean_par_1, prior_std_par_1)* dnorm(par_2_seq[i-1], prior_mean_par_2, prior_std_par_2)
+    
+    D_pr <- dnorm(proposed_par_1,  prior_mean_par_1, prior_std_par_1)*dnorm(proposed_par_2,  prior_mean_par_2, prior_std_par_2)
+    
+    a <- min((N_pos*N_pr)/(D_pos*D_pr), 1)
+    
+    
+    old_or_new <- rbinom(1, size = 1, prob = c(a, 1-a))
+    
+    par_1_seq[i] <- ifelse(old_or_new, proposed_par_1,par_1_seq[i-1])
+    par_2_seq[i] <- ifelse(old_or_new, proposed_par_2,par_2_seq[i-1])
+    
+    
+    
+    missing_prediction[i] <- (type_d == 'normal')*rnorm(1, par_1_seq[i],
+                                                      par_2_seq[i]) +
+                              (type_d == 'beta')*rbeta(1, par_1_seq[i],
+                                                       par_2_seq[i])
+    
+    }
+  
+  
+  # replace all NA
+  change_these <- is.na(Modena_new_imput[,col])*missing_prediction
+  # replace NA's with zeros and add those
+  Modena_new_imput[,col][is.na(Modena_new_imput[,col])] <- 0.01
+  Modena_new_imput[,col] <- Modena_new_imput[,col] + change_these
+  
+  }
+
+summary(Modena_new_imput)
+
+
+
+```
+
+### Illustration of the dataset after imputing {.tabset .tabset-fade .tabset-pills}
+
+
+#### Timeseries plot {.tabset .tabset-fade .tabset-pills}
+
+```{r, results = "asis", warning=FALSE, message=FALSE}
+Modena_species <- c('pm10', 'humidity', 'pm25', 'pressure', 'temperature')
+
+par(mfrow=c(1,1))
+
+for (i in 1:length(Modena_species)) {
+  cat(sprintf('\n##### %s \n' ,Modena_species[i]))
+  plot(Modena_new_imput[,i], main = Modena_species[i], xlab= 'days', ylab = 'pm10', pch = 20, col = 'blue', cex = 1)
+  cat('\n')
+}
+
+
+```
+
+
+#### Histograms {.tabset .tabset-fade .tabset-pills}
+
+```{r, results = "asis", warning=FALSE, message=FALSE}
+
+Modena_species <- c('pm10', 'humidity', 'pm25', 'pressure', 'temperature')
+
+# thanks to Cullen and Frey
+distr_per_specie <- c('beta','beta','beta','normal','beta')
+
+par(mfrow=c(1,2))
+
+
+fitDISTR <- function(data, distr){
+  if (distr == 'beta'){
+    a <- fitdistr(data, densfun = 'beta',list(shape1=1, shape2=5))
+  }
+  else {
+    a <- fitdistr(data, densfun = distr)
+  }
+  
+  return(a)
+}
+
+for (i in 1:length(Modena_species)){
+  cat(sprintf('\n##### %s \n' ,Modena_species[i]))
+  hist(Modena_new_imput[,i], prob=T, xlab = 'pm10', main = paste(Modena_species[i],'(',distr_per_specie[i],')'), nclass = 20)
+  # #lines(density(df_it_new[,i]), col='red', lwd=2)
+  a <- fitDISTR(Modena_new_imput[,i],distr_per_specie[i])
+  # #b <- fitdistr(df_it_new[,i], densfun = 'beta',list(shape1=1, shape2=5))
+  # 
+  curve((distr_per_specie[i] == 'beta')*dbeta(x, shape1 =a$estimate[1], shape2=a$estimate[2])+
+        (distr_per_specie[i] == 'normal')*dnorm(x, a$estimate[1], a$estimate[2]), col='blue', lwd=3, add=TRUE)
+  # #curve(dbeta(x, shape1 =b$estimate[1], shape2=b$estimate[2]), col='red', lwd=3, add=TRUE)
+
+  descdist(Modena_new_imput[,i], discrete = FALSE,boot=1000)
+  cat('\n')
+  }
+
+```
+
+#### Correlation
+
+```{r, warning=FALSE, message=FALSE}
+par(mfrow=c(1,1))
+M <-cor(Modena_new_imput)
+col <- colorRampPalette(c("#BB4444", "#EE9988", "#FFFFFF", "#77AADD", "#4477AA"))
+corrplot(M, method="color", col=col(100),
+         type="upper", order="hclust",
+         addCoef.col = "black", # Add coefficient of correlation
+         tl.col="black", tl.srt=45, #Text label color and rotation
+         # Combine with significance
+         #p.mat = p.mat,
+         #sig.level = 0.41,
+         #insig = "blank",
+         # hide correlation coefficient on the principal diagonal
+         diag=FALSE
+)
+```
+
+
+#### Autocorrelation {.tabset .tabset-fade .tabset-pills}
+
+```{r, results = "asis", warning=FALSE, message=FALSE}
+Modena_species <- c('pm10', 'humidity', 'pm25', 'pressure', 'temperature')
+par(mfrow=c(1,1))
+
+for (i in 1:length(Modena_species)){
+  cat(sprintf('\n##### %s \n' ,Modena_species[i]))
+  AutoCorrelation <- acf(Modena_new_imput[,i], plot = FALSE)
+  plot(AutoCorrelation, main = Modena_species[i])
+  cat('\n')
+}
+
+```
+
+
+
+## Inferencial models {.tabset .tabset-fade .tabset-pills}
+
+The main idea is to try to predict what will happen for pm10 in Modena knowing what is going on with pm25, temperature and pressure.
+
+### Statistical approach
+```{r, message=FALSE, warning=FALSE}
+
+# linear fit
+linear_fit <- with(Modena_new_imput, lm(pm10 ~ pm25 + temperature + pressure, Modena_new_imput))$coefficients
+
+
+# plot difference
+plot(density(linear_fit[1] + linear_fit[2]*Modena_new_imput$pm25 + linear_fit[3]*Modena_new_imput$temperature + linear_fit[4]*Modena_new_imput$pressure - Modena_new_imput$pm10), pch = 20, col = 'blue', cex = 1 ,xlab = 'difference between fit and Modena', main = 'Distriburion of the difference')
+
+# plot timeseries modena and fit
+plot(linear_fit[1] + linear_fit[2]*Modena_new_imput$pm25 + linear_fit[3]*Modena_new_imput$temperature + linear_fit[4]*Modena_new_imput$pressure, Modena_new_imput$pm10,   pch = 20, col = 'blue', cex = 1 , ylab = 'Modena', xlab = 'fit from BO and PR')
+
+cor(linear_fit[1] + linear_fit[2]*Modena_new_imput$pm25 + linear_fit[3]*Modena_new_imput$temperature + linear_fit[4]*Modena_new_imput$pressure, Modena_new_imput$pm10)
+
+```
+
+### Jags (linear model normal)
+
+```{r, message=FALSE}
+set.seed(13579)
+cat(
+  "model {
+  #model
+  for (i in 1:N){
+    return[i] ~ dnorm(mu[i], tau)
+    mu[i] <- b0 + b1*pm25[i] - b2*temperature[i] + b3*pressure[i]
+  }
+  
+  #priors
+  b0 ~ dnorm( 0 , 1.0E-12 )
+  b1 ~ dnorm( 0 , 1.0E-12 )
+  b2 ~ dnorm( 0 , 1.0E-12 )
+  b3 ~ dnorm( 0 , 1.0E-12 )
+  tau ~ dgamma(0.001, 0.001)
+  }", file="linear.jag"
+)
+# Define data structure
+
+dat1 = list(return = Modena_new_imput$pm10, pm25=Modena_new_imput$pm25, temperature=Modena_new_imput$temperature,pressure=Modena_new_imput$pressure, N=nrow(Modena_new_imput))
+# lapply(dat1,summary)
+
+# Init list parameters for JAGS
+
+inits<-list(
+  list(b0=1.01, b1=1.01, b2=1.01, b3 = 1.01, tau = 1),
+  list(b0=0.9, b1=0.9, b2=0.9, b3=0.9, tau= 0.5)        
+)
+parameters<-c("b0", "b1", "b2", "b3", "tau")
+
+# RUN JAGS
+linear_model <- jags(data = dat1,  # DATA
+                     inits = inits,  # MODEL
+                     parameters.to.save = parameters,
+                     model.file = "linear.jag",
+                     n.chains = 2,
+                     n.iter = 5000,
+                     n.burnin = 2000,
+                     n.thin = 10)
+
+linear_model
+
+chainArray<-linear_model$BUGSoutput$sims.array
+bayesplot::mcmc_acf(chainArray)
+
+
+# Credible interval (HPD)
+
+chainMat <- linear_model$BUGSoutput$sims.matrix
+beta.HPD.jags <- coda::HPDinterval(as.mcmc(chainMat))
+beta.HPD.jags
+
+
+# plot timeseries modena and fit
+B0 <- mean(linear_model$BUGSoutput$sims.matrix[,1])
+B1 <- mean(linear_model$BUGSoutput$sims.matrix[,2])
+B2 <- mean(linear_model$BUGSoutput$sims.matrix[,3])
+B3 <- mean(linear_model$BUGSoutput$sims.matrix[,4])
+plot(B0 + B1*Modena_new_imput$pm25 + B2*Modena_new_imput$temperature + B3*Modena_new_imput$pressure, Modena_new_imput$pm10,   pch = 20, col = 'blue', cex = 1 , ylab = 'Modena', xlab = 'fit from BO and PR')
+
+cor(B0 + B1*Modena_new_imput$pm25 + B2*Modena_new_imput$temperature + B3*Modena_new_imput$pressure, Modena_new_imput$pm10)
+
+```
+
+
+
+
+
