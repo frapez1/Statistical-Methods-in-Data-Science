@@ -1,0 +1,710 @@
+---
+title: "HW_SDS2"
+author: "Francesco Pezone"
+date: "01/07/2020"
+output: 
+  html_document:
+    toc: True
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Exercise 1) {.tabset .tabset-fade .tabset-pills}
+## Point a)
+
+```{r }
+
+# target distribution
+pi <- function(x){
+  dnorm(x,2,0.5)
+}
+
+# sampling distribution
+q <- function(x){
+  dcauchy(x,location = 1.85, scale = 0.95)
+}
+
+q_sampling <- function(x){
+  rcauchy(x,location = 1.85, scale = 0.95)
+}
+
+k=2.7
+
+curve(q(x)*k,0,4,xlab="x",ylab=expression(f[X](x)),ylim=c(0,2),lwd=2)
+curve(pi(x),add=TRUE,col="red",lwd=2)
+```
+
+The foundamental part is that \( q(x) \geq \pi(x) \)   \(\forall x \in \mathbb{R}\), for this reason even if the two distribution are shifted a little bit I don't care about it, but I have to consider \(k*q(x) \) instead of \(q(x) \).
+
+```{r }
+# Algorithm
+
+#
+n_sim_aux=10000
+
+# inizializing
+Y=rep(NA,n_sim_aux)
+E=rep(NA,n_sim_aux)
+set.seed(1234)
+# loop
+for(i in 1:n_sim_aux){
+  # sampling from cauchy
+  Y[i]=q_sampling(1)
+  
+  # acceptance rejection condition
+  E[i]=rbinom(1,size=1,prob=pi(Y[i])/(k*q(Y[i])))
+}
+
+# head(cbind(Y,E))
+
+# pick only the accepted values
+X <- Y[E==1]
+
+# plotting the result
+hist(X,prob=TRUE)
+curve(pi(x),add=TRUE,col="red",lwd=3)
+
+```
+
+## Point b)
+Numerically speaking the efficency is the ratio of accepted points over the total number of points:
+```{r }
+efficiency <- length(X)/n_sim_aux
+round(efficiency,3)
+```
+
+In theory since the algorithm use a Bernoulli distribution with probability \( p(x) = \frac{\pi(x)}{k*q(x)}\) in order to choose if accept the point, the efficiency is given by:
+
+\( E[p(x)|q(x)] = \int_{-\infty}^{\infty} p(x)q(x) dx = \int_{-\infty}^{\infty} \frac{\pi(x)}{k*q(x)}q(x) dx = \frac{1}{k} \)
+
+```{r }
+efficiency_th <- 1/k
+round(efficiency_th,3)
+```
+
+
+
+# Exercise 2) {.tabset .tabset-fade .tabset-pills}
+
+## Point a)
+
+Formally, an infinite exchangeable sequence of random variables is sequence \(X_1, X_2, X_3, ...\) of random variables such that for any finite permutation σ of the indices 1, 2, 3, ..., (the permutation acts on only finitely many indices, with the rest fixed), the joint probability distribution of the permuted sequence
+
+\( X_{\sigma(1)},X_{\sigma(2)},X_{\sigma(3)},... \) 
+is the same as the joint probability distribution of the original sequence.
+
+### 1)
+From De Finetti I have
+
+\( E[X_i] = E[X_j] = \int_0^1 \theta \pi(\theta)d\theta = E_\pi[\theta] \)
+
+### 2)
+
+\( E[X_iX_j] = \int_0^1 \theta^2 \pi(\theta)d\theta = E_\pi[\theta^2] \)
+
+
+### 3)
+I can write:
+
+\( Cov(X_i,X_j) = E[X_iX_j] - E[X_i]E[X_j]  = E_\pi[\theta^2] - E_\pi[\theta]^2  = Var_\theta(\theta) \)
+
+## Point b) 
+
+This is true since a.3 is true and for the formula of the correlation, since everything is positive.
+
+\(Cor(X_i,X_j) = \frac{Var_\theta(\theta)}{\sqrt{Var(X_i)Var(X_j)}}\)
+
+## Point c)
+
+From a.3 and the definition of correlatrion I have
+
+\(Cor(X_i,X_j) = \frac{Var_\theta(\theta)}{\sqrt{Var(X_i)Var(X_j)}} = 1\)
+
+So at the end I must have 
+
+\(Var_\theta(\theta) = Var(X_i) = Var(X_j)\)
+
+## Point d)
+This simply mean that \(X\) and \(\theta\) must have the same mean and variance so \(\pi \) should be a uniform distribution or another distribution that sutisfy the condition.
+
+# Exercise 3) {.tabset .tabset-fade .tabset-pills}
+## Point a) Considerations
+
+
+Looking at the distribution of the variable \(\mu_i\) I realized that it cannot assume negative values, since it represents an average length of the dugongs according to their age. This aspect together with its asymptotic analysis led me to change the priorities of two parameters to ensure that the maximum average length of a dugong is 2.7 meters and the minimum of 1.2 meter. For this I will use the following new distributions:
+
+
+\(\alpha \sim N(2.7, \sigma_{\alpha}^2) \\ \beta \sim N(1.2, \sigma_{\beta}^2)   \)
+
+Considering that a dugong can grow for the first 10 years and after the size is more or less constant, if I choose \(\gamma_{my} = 0.80\) I have the following curve.
+
+```{r}
+
+mu_i <- function(x, alpha, beta, gamma){
+  - beta*gamma^x + alpha
+}
+curve(mu_i(x, 2.7, 1.5, 0.80 ), from = 0, to = 30, xlab = 'age', ylab = 'mean length',)
+```
+
+So the code for this part is:
+```{r }
+
+df <- read.table("C:/Users/franc/Desktop/Data_science/SDS_2/SDS_2_Homeworks/hw/hw_1/dati_dugonghi.txt", 
+                 header = TRUE)
+N_df <- length(df$I)
+
+mu_i <- function(x, alpha, beta, gamma){
+  - beta*gamma^x + alpha
+}
+Y_i <- function(y, x, alpha, beta, gamma, tau_2){
+  dnorm(y, mu_i(x,alpha, beta, gamma), 1/sqrt(tau_2))
+}
+
+
+alpha_d <- function(alpha, prior_alpha_mean, prior_alpha_std){
+  dnorm(alpha, prior_alpha_mean, prior_alpha_std)
+}
+
+beta_d <- function(beta, prior_beta_mean, prior_beta_std){
+  dnorm(beta, prior_beta_mean, prior_beta_std)
+}
+
+gamma_d <- function(gamma){
+  dunif(gamma)
+}
+
+tau_2_d <- function(tau, prior_tau_shape, prior_tau_rate){
+  dinvgamma(tau, shape = prior_tau_shape, rate = prior_tau_rate)
+}
+```
+## Point b) 
+
+\(L(\alpha,\beta,\gamma,\tau^2) = \prod_{i = 1}^{n} Y_i = \frac{\tau^n}{(2\pi)^\frac{n}{2}}\exp \left( -\frac{\tau^2}{2} \sum_{i=1}^{n}(y_i - \alpha + \beta \gamma^{x_i})^2 \right) \)
+
+```{r , message=FALSE}
+lik <- function(alpha, beta, gamma, tau_2){
+  prod(Y_i(df$Length, df$Age, 
+              alpha_d(alpha, prior_alpha_mean, prior_alpha_std),
+              beta_d(beta, prior_beta_mean, prior_beta_std), 
+              gamma_d(gamma),
+              tau_2_d(tau_2, prior_tau_shape, prior_tau_rate)))
+}
+
+```
+
+
+## Point c) 
+Let's write the -loglik in order simplify the computation
+
+\(l(\alpha,\beta,\gamma,\tau^2) \propto nln(\tau) -\frac{\tau^2}{2} \sum_{i=1}^{n}(y_i - \alpha + \beta \gamma^{x_i})^2  \)
+
+```{r , message=FALSE, warning=FALSE}
+require(invgamma)
+Y_log_lik <- function(alpha, beta, gamma, tau_2){
+  -sum(log(Y_i(df$Length, df$Age, 
+              alpha_d(alpha, prior_alpha_mean, prior_alpha_std),
+              beta_d(beta, prior_beta_mean, prior_beta_std), 
+              gamma_d(gamma),
+              tau_2_d(tau_2, prior_tau_shape, prior_tau_rate))))
+}
+
+
+Y_log_lik_optim <- function(x){
+  Y_log_lik(x[1],x[2],x[3],x[4])
+}
+
+# parameters from point d)
+prior_alpha_mean <- 2.7
+prior_alpha_std <- 0.5
+prior_beta_mean <- 1.5
+prior_beta_std <- 0.5
+prior_tau_shape <- 0.1
+prior_tau_rate <- 0.1
+set.seed(11223344)
+
+# those values as different each time, and not only a little bit..... 
+# I' not able to use method = "BFGS", since this error appear 
+# Error in optim(par = c(2.7, 1.1, 0.8, 0.04), Y_log_lik_optim, control = list(fnscale = -1),  :   non-finite finite-difference value [4]
+
+optim(par = c(2.7,1.0,0.8,0.04),
+      Y_log_lik_optim,control=list(fnscale=-1))$par
+
+
+```
+
+
+
+## Point d) 
+Since the parameters are all indipendent the join is:
+
+\( \pi(\alpha,\beta,\gamma,\tau^2) = \pi(\alpha)\pi(\beta)\pi(\gamma)\pi(\tau^2) \propto exp(-\frac{(\alpha-2.7)^2}{2\sigma_{\alpha}^2})exp(-\frac{(\beta-1.5)^2}{2\sigma_{\beta}^2})\tau^{2(-a-1)}exp(-\frac{b}{\tau^2})\) 
+
+As I wrote at the beginning, \(\mu_\alpha = 2.7\) and \(\mu_\beta = 1.5\), since I'm quite sure of my choices for the parameters I choose:
+
+\( \sigma_{\alpha} = 0.5 \\ \sigma_{\beta} = 0.5 \)
+
+For what concern \(\tau^2\) let's pick some non informative prior:
+
+\(a = 0.1 \\b = 0.1\)
+
+```{r , message=FALSE}
+require(invgamma)
+curve(dinvgamma(x, 0.1,0.1), from = 0, to = 20, ylab = 'tau^2')
+```
+
+So the parameters are:
+```{r}
+prior_alpha_mean <- 2.7
+prior_alpha_std <- 0.5
+prior_beta_mean <- 1.5
+prior_beta_std <- 0.5
+prior_tau_shape <- 0.1
+prior_tau_rate <- 0.1
+```
+
+
+## Point e) {.tabset .tabset-fade .tabset-pills}
+
+Posterior:
+
+\( \pi(\alpha,\beta,\gamma,\tau^2|Y)  \propto L(\alpha,\beta,\gamma,\tau^2) \pi(\alpha,\beta,\gamma,\tau^2) \propto  \frac{\tau^n}{(2\pi)^\frac{n}{2}}\exp \left( -\frac{\tau^2}{2} \sum_{i=1}^{n}(y_i - \alpha + \beta \gamma^{x_i})^2 \right) exp(-\frac{(\alpha-2.7)^2}{2\sigma_{\alpha}^2})exp(-\frac{(\beta-1.5)^2}{2\sigma_{\beta}^2})\tau^{2(-a-1)}exp(-\frac{b}{\tau^2}) \)
+
+
+Now let's see the full conditional distributions.
+
+### full conditional of \(\alpha\))
+
+For this, in order to avoid tons of calculations to do and to write, I'm going to use some results from conjugate analysis.
+
+Let's start from 
+
+\(\pi(\alpha|\beta,\gamma,\tau^2,x,y) \propto L(\alpha,\beta,\gamma,\tau^2) \pi(\alpha)\)
+
+Now since I CARE ABOUT ONLY the parameter \(\alpha\) is like if we fall in a conjugate analysis with prior \(\pi(\alpha)\) normal with known variance and the likelihood is like the product of n normal with mean \(\alpha\), known precision \(\tau^2\) and with variable \(y_i + \beta\gamma^{x_i}\). For this from the conjugate analysis I know that:
+
+\( \pi(\alpha|\beta,\gamma,\tau^2,x,y) \propto N\left(\mu' = \frac{\sigma_{\alpha}^2}{1+n\tau^2\sigma_{\alpha}^2} \left( \frac{\mu_{\alpha}}{\sigma_{\alpha}^2} +  \tau^2 \sum_{i=1}^{n}(y_i + \beta \gamma^{x_i}) \right) , \sigma'^2 = \frac{\sigma_{\alpha}^2}{1+n\tau^2\sigma_{\alpha}^2} \right) \)
+
+Note: 
+I used the follow cojugate analysis
+
+\( \pi(\theta) \propto N(\mu_{\theta}, \sigma^2_{\theta}) \\ T_i \propto N(\theta, \sigma^2) \)
+
+
+With:
+\( \theta = \alpha   \\ \mu_{\theta} = \mu_{\alpha} \\ \sigma^2_{\theta} = \sigma^2_{\alpha} \\ t_i = y_i + \beta\gamma^{x_i} \\ \sigma^2 = \frac{1}{\tau^2}
+\)
+
+
+### full conditional of \(\beta\))
+
+I used the same approach for \(\beta\) with this type of conjugate:
+
+\( \theta = \beta   \\ \mu_{\theta} = \mu_{\beta} \\ \sigma^2_{\theta} = \sigma^2_{\beta} \\ t_i = \frac{y_i}{\gamma^{x_i}} - \frac{\alpha}{\gamma^{x_i}} \\ \sigma^2 = \frac{1}{\gamma^{2x_i}\tau^2}
+\)
+
+So the result is:
+\(  \pi(\beta|\alpha,\gamma,\tau^2,x,y) \propto N\left(\mu' = \frac{\sigma_{\beta}^2}{1+\tau^2\sigma_{\beta}^2\sum_{i=1}^n\gamma^{2x_i}} \left( \frac{\mu_{\beta}}{\sigma_{\beta}^2} +  \tau^2 \sum_{i=1}^{n}(y_i - \alpha) \gamma^{x_i} \right) , \sigma'^2 = \frac{\sigma_{\beta}^2}{1+\tau^2\sigma_{\beta}^2\sum_{i=1}^n\gamma^{2x_i}} \right)  \)
+
+### full conditional of \(\gamma\))
+
+Since the prior of  \(\gamma\) us a uniform, with a little abuse of notation just to emphasize the fact that all the othe parameter are fixed, I'll wrote the conditional as follow:
+
+\(  \pi(\gamma|\alpha,\beta,\tau^2,x,y) \propto L(\gamma|\alpha,\beta,\tau^2) \propto exp\left(- \frac{\tau^2}{2} \sum_{i=1}^{n}(y_i - \alpha + \beta \gamma^{x_i})^2 \right) \)
+
+### full conditional of \(\tau^2\))
+
+Even here I can consider a conjugate prior with an inverse gamma prior and a normal distribution of the data given parameters. 
+So I have 
+\( \pi(\tau^2|\alpha,\beta,\gamma,x,y)  \propto InvGamma \left(a' = a + \frac{n}{2}, b' = b + \frac{\sum_{i=1}^{n}(y_i - \alpha + \beta \gamma^{x_i})^2}{2}\right)\)
+
+
+
+## Point f)
+
+
+```{r}
+
+FC_alpha <- function(beta, gamma, tau_2){
+  FC_var_alpha <- (prior_alpha_std^2)/(1+27*tau_2*(prior_alpha_std^2))
+  FC_mu_alpha <- FC_var_alpha*(prior_alpha_mean/(prior_alpha_std^2) + tau_2*sum(df$Length + beta*gamma^df$Age))
+  return(rnorm(1, FC_mu_alpha, sqrt(FC_var_alpha)))
+}
+
+FC_beta <- function(alpha, gamma, tau_2){
+  FC_var_beta <- (prior_beta_std^2)/(1+tau_2*(prior_beta_std^2)*sum(gamma^(df$Age*2)))
+  FC_mu_beta <- FC_var_beta*(prior_beta_mean/(prior_beta_std^2) + tau_2*sum((df$Length -alpha)*gamma^df$Age))
+  return(rnorm(1, FC_mu_beta, sqrt(FC_var_beta)))
+}
+
+FC_gamma <- function(alpha, beta, tau_2){
+  return(exp(-tau_2*sum(( beta*runif(1)^df$Age + df$Length  - alpha)^2)))
+}
+FC_tau_2 <- function(alpha, beta, gamma){
+  FC_shape_tau_2 <- prior_tau_shape + 27/2
+  FC_rate_tau_2 <- prior_tau_shape + sum(( beta*gamma^df$Age + df$Length  - alpha)^2)/2
+  return(rinvgamma(1, shape = FC_shape_tau_2, rate = FC_rate_tau_2))
+}
+```
+
+And now let's see the algotithm
+
+```{r}
+set.seed(124)
+n_sim_aux <- 10000
+
+alpha_seq <- rep(NA, n_sim_aux)
+beta_seq <- rep(NA, n_sim_aux)
+tau_2_seq <- rep(NA, n_sim_aux)
+gamma_seq <- rep(NA, n_sim_aux)
+  
+alpha_seq[1] <- 2.7
+beta_seq[1] <- 1.5
+tau_2_seq[1] <- 0.5
+gamma_seq[1] <- 0.8
+ 
+for (i in 2:n_sim_aux){
+  # gibbs
+  alpha_seq[i] <- FC_alpha(beta_seq[i-1], gamma_seq[i-1], tau_2_seq[i-1])
+  beta_seq[i] <- FC_beta(alpha_seq[i], gamma_seq[i-1], tau_2_seq[i-1])
+  
+  
+  # metropolis
+  proposed <- FC_gamma(alpha_seq[i], beta_seq[i], tau_2_seq[i-1])
+  
+  a <- min(proposed/gamma_seq[i-1], 1)
+  gamma_seq[i] <- sample(c(proposed, gamma_seq[i-1]), size = 1, prob = c(a, 1-a))
+   
+  
+
+  # gibbs
+  tau_2_seq[i] <- FC_tau_2(alpha_seq[i], beta_seq[i], gamma_seq[i])
+}
+#  
+# mean(alpha_seq)
+# mean(beta_seq)
+# mean(gamma_seq)
+# mean(tau_2_seq)
+# sd(alpha_seq)
+# sd(beta_seq)
+# sd(gamma_seq)
+# sd(tau_2_seq)
+```
+
+
+
+## Point g)
+
+
+```{r}
+par(mfrow=c(2,2))
+plot(alpha_seq, pch = 20, col="blue", cex=1,main = 'alpha')
+plot(beta_seq, pch = 20, col="blue", cex=1, main = 'beta')
+plot(gamma_seq, pch = 20, col="blue", cex=1, main = 'gamma')
+plot(tau_2_seq, pch = 20, col="blue", cex=1, main = 'tau_2')
+```
+
+## Point h)
+```{r}
+par(mfrow=c(2,2))
+plot(cumsum(alpha_seq) / seq_along(alpha_seq), pch = 20, col="blue", cex=1,main = 'mean in time alpha', ylab = 'mean')
+plot(cumsum(beta_seq) / seq_along(beta_seq), pch = 20, col="blue", cex=1,main = 'mean in time beta', ylab = 'mean')
+plot(cumsum(gamma_seq) / seq_along(gamma_seq), pch = 20, col="blue", cex=1,main = 'mean in time gamma', ylab = 'mean')
+plot(cumsum(tau_2_seq) / seq_along(tau_2_seq), pch = 20, col="blue", cex=1,main = 'mean in time tau_2', ylab = 'mean')
+
+
+```
+
+
+## Point i)
+I'm going to pick the mean, of the values in the Markow chain, as estimator for each parameter.
+
+```{r}
+
+alpha_optim <- c(mean(alpha_seq), sd(alpha_seq))
+alpha_optim
+plot(density(alpha_seq), pch = 20, col="blue", cex=1,main = 'alpha')
+
+beta_optim <- c(mean(beta_seq), sd(beta_seq))
+beta_optim
+plot(density(beta_seq), pch = 20, col="blue", cex=1,main = 'beta')
+
+gamma_optim <- c(mean(gamma_seq), sd(gamma_seq))
+gamma_optim
+plot(density(gamma_seq), pch = 20, col="blue", cex=1,main = 'gamma')
+
+tau_2_optim <- c(mean(tau_2_seq), sd(tau_2_seq))
+tau_2_optim
+plot(density(tau_2_seq), pch = 20, col="blue", cex=1,main = 'tau_2')
+
+
+```
+
+## Point j)
+
+I'm going to evaliate the uncertanty as the sd over the mean, in order to rescale it at the same level.
+Tau_2 have the the largest posterior uncertainty.
+
+```{r}
+
+alpha_optim[2]/alpha_optim[1] 
+
+beta_optim[2]/beta_optim[1]
+
+gamma_optim[2]/gamma_optim[1]
+
+tau_2_optim[2]/tau_2_optim[1]
+
+
+```
+
+## Point k)
+Beta and Tau_2 with 0.39.
+In general beta has a large negative correlation with the other variables.
+
+```{r,warning=FALSE,message=FALSE}
+library(corrplot)
+par(mfrow=c(1,1))
+M <-cor(data.frame(alpha_seq, beta_seq, gamma_seq, tau_2_seq))
+col <- colorRampPalette(c("#BB4444", "#BB4444", "#FFFFFF", "#4477AA", "#4477AA"))
+corrplot(M, method="color", col=col(100),  
+         type="upper", order="hclust", 
+         addCoef.col = "black", # Add coefficient of correlation
+         tl.col="black", tl.srt=45, #Text label color and rotation
+         # Combine with significance
+         #p.mat = p.mat, 
+         #sig.level = 0.41, 
+         #insig = "blank", 
+         # hide correlation coefficient on the principal diagonal
+         diag=FALSE 
+)
+
+```
+
+## Point l)
+I'm going to sample the variables as at the point f and after evaluate \(Y_i\) with those sampled parameters; it is like integrate over those parameters. 
+
+```{r}
+set.seed(187)
+n_sim_aux <- 10000
+
+post_predictive_20 <- rep(NA, n_sim_aux)
+alpha_seq_20 <- rep(NA, n_sim_aux)
+beta_seq_20 <- rep(NA, n_sim_aux)
+tau_2_seq_20 <- rep(NA, n_sim_aux)
+gamma_seq_20 <- rep(NA, n_sim_aux)
+  
+alpha_seq_20[1] <- alpha_optim[1]
+beta_seq_20[1] <- beta_optim[1]
+tau_2_seq_20[1] <- tau_2_optim[1]
+gamma_seq_20[1] <- gamma_optim[1]
+post_predictive_20[1] <- rnorm(1, - beta_seq_20[1]*gamma_seq_20[1]^20 + alpha_seq_20[1], 1/sqrt(tau_2_seq_20[1]))
+
+for (i in 2:n_sim_aux){
+  # gibbs
+  alpha_seq_20[i] <- FC_alpha(beta_seq_20[i-1], gamma_seq_20[i-1], tau_2_seq_20[i-1])
+  beta_seq_20[i] <- FC_beta(alpha_seq_20[i], gamma_seq_20[i-1], tau_2_seq_20[i-1])
+  
+  
+  # metropolis
+  proposed <- FC_gamma(alpha_seq_20[i], beta_seq_20[i], tau_2_seq_20[i-1])
+  
+  a <- min(proposed/gamma_seq_20[i-1], 1)
+  gamma_seq_20[i] <- sample(c(proposed, gamma_seq_20[i-1]), size = 1, prob = c(a, 1-a))
+   
+  
+  
+  
+  # gibbs
+  tau_2_seq_20[i] <- FC_tau_2(alpha_seq_20[i], beta_seq_20[i], gamma_seq_20[i])
+  
+  # postrerior predictive part
+  post_predictive_20[i] <- rnorm(1, - beta_seq_20[i]*gamma_seq_20[i]^20 + alpha_seq_20[i], 1/sqrt(tau_2_seq_20[i]))
+}
+
+
+summary(post_predictive_20)
+plot(density(post_predictive_20))
+
+```
+
+## Point m)
+This is the same of the previous point but with age = 30.
+
+```{r}
+set.seed(134)
+n_sim_aux <- 10000
+
+post_predictive_30 <- rep(NA, n_sim_aux)
+alpha_seq_30 <- rep(NA, n_sim_aux)
+beta_seq_30 <- rep(NA, n_sim_aux)
+tau_2_seq_30 <- rep(NA, n_sim_aux)
+gamma_seq_30 <- rep(NA, n_sim_aux)
+  
+alpha_seq_30[1] <- alpha_optim[1]
+beta_seq_30[1] <- beta_optim[1]
+tau_2_seq_30[1] <- tau_2_optim[1]
+gamma_seq_30[1] <- gamma_optim[1]
+post_predictive_30[1] <- rnorm(1, - beta_seq_30[1]*gamma_seq_30[1]^30 + alpha_seq_30[1], 1/sqrt(tau_2_seq_30[1]))
+ 
+for (i in 2:n_sim_aux){
+  
+  # gibbs
+  alpha_seq_30[i] <- FC_alpha(beta_seq_30[i-1], gamma_seq_30[i-1], tau_2_seq_30[i-1])
+  beta_seq_30[i] <- FC_beta(alpha_seq_30[i], gamma_seq_30[i-1], tau_2_seq_30[i-1])
+  
+  
+  # metropolis
+  proposed <- FC_gamma(alpha_seq_30[i], beta_seq_30[i], tau_2_seq_30[i-1])
+  
+  a <- min(proposed/gamma_seq_30[i-1], 1)
+  gamma_seq_30[i] <- sample(c(proposed, gamma_seq_30[i-1]), size = 1, prob = c(a, 1-a))
+   
+  
+  
+  
+  
+  # gibbs
+  tau_2_seq_30[i] <- FC_tau_2(alpha_seq_30[i], beta_seq_30[i], gamma_seq_30[i])
+  
+  # postrerior predictive part
+  post_predictive_30[i] <- rnorm(1, - beta_seq_30[i]*gamma_seq_30[i]^30 + alpha_seq_30[i], 1/sqrt(tau_2_seq_30[i]))
+}
+
+summary(post_predictive_30)
+
+plot(density(post_predictive_30))
+
+```
+
+## Point n)
+
+Both are more or less the same since the spread arround the mean is given by \(\frac{1}{\tau}\).
+
+```{r}
+precision_20 <- 1/sd(post_predictive_20)^2
+precision_20
+
+precision_30 <- 1/sd(post_predictive_30)^2
+precision_30
+```
+
+## Final considerations) {.tabset .tabset-fade .tabset-pills}
+
+### Result of beta
+The results for \(\beta \) are far from what I thought at the beginning ... now I can't believe that a dugong when born has a length of \( \alpha - \beta = 2.61 - 0.9 = 1.7 m \) ; obviously the problem is that our points start from \(age = 1 \) and I think that for smaller ages this model is not good since at the beginning the growth is faster than the prediction of the model.
+
+### Result of tau_2
+The problem is that tau_2 allow for solution out of sense, values of thhe posterior predictive distribution are too high or even negative.
+The problem is that the precision is too low, and I cannot understand why since the datapoints are really close to the mean.
+
+In fact at the beginning I select differents type of prior parameters following this approach: 
+
+" since tau_2 is the precision ( \(\tau^2 = \frac{1}{\sigma^2}\) ) I want that the mode of this distribution is higher, let's suppose \( 6.25 \) so I'm going to pick, given the formula \(mode = \frac{b}{a+1}\):
+
+\(a = 10 \\b = 68.75\)"
+
+I have to change this for the optimization porblem, since it has a lot of local minima and due to the results.
+
+
+
+### This is not the real story...
+
+Just to be precise the fact that  \(\alpha\), \(\beta\) and \(\gamma\) are independent is not true, in fact, the length of a Dugong must be greater than 0, so there are some limitations if we consider one variable given the others. What I made in this hw was just work on the priors considering the problem only at the beginning when \(age= 0\), in such a way to consider \(\gamma\) as indipendent. 
+For what concern \(\alpha\) and \(\beta\) I wrote the prior to have a really small intersection so that \(\alpha>\beta\) 
+almost always; in this way I consider those two parameters as indipendent.
+
+# Exercise 4) {.tabset .tabset-fade .tabset-pills}
+Defining the values
+
+```{r}
+set.seed(1234)
+
+# support of the chain
+S = c(1,2,3)
+
+# initial distribution of the starting point
+# (aka marginal of X_0)
+mu = c(0.19,0.53,0.28)
+
+# transition probability matrix
+P = matrix(c(0.47,0.34,0.04,0.28,0.32,0.53,0.25,0.34,0.43), ncol=3, nrow=3)
+
+
+
+```
+## Point 0) 
+this point is not necessary but let's see if this problem allow a stationary solution and let's find it
+
+
+```{r}
+# since there is a lambda = 1 there is a stationary solution (in fact we can evaluate P^n without vanishing)
+eigen(t(P))
+
+# let's find the eigenvector with eigenvalue equal to 1 and let's normalize it since it represent a probability distribution (the stationary probability distr)
+eigen(t(P))$vector[,1]/sum(eigen(t(P))$vector[,1])
+
+
+# check to see if it is the stationary solution.
+t(eigen(t(P))$vector[,1]/sum(eigen(t(P))$vector[,1]))%*% P
+```
+
+## Point a)
+As I saw befor \(\pi(X_0)= \mu^T\) 
+
+```{r}
+pi_0 <- t(mu)
+pi_0
+```
+
+## Point b)
+We have to move to the next step, so let's multiply \(\pi(X_0)\) with the transition probability matrix.
+
+```{r}
+pi_1 <- pi_0 %*% P
+pi_1
+```
+
+
+## Point c)
+
+The joint matrix distribution is, element by element,   \( P(X_1=r,X_0=c) = P(X_1=r|X_0=c)*P(X_0=c) \)
+
+```{r}
+
+# so the result is
+J <- P*matrix(rep(pi_0,3),3,3)
+J
+# check
+
+# correct since
+colSums(J) == pi_1
+
+# correct since
+rowSums(J) == pi_0
+```
+
+## Point d)
+By definition
+```{r}
+
+# by definition
+C_1_0 <- P
+C_1_0
+
+
+# With the Bayes rule we have the same result
+J/(matrix(rep(pi_0,3),3,3))
+```
+
+## Point e)
+I used the Bayes rule
+
+```{r}
+# I'm going to use the hadamard product
+C_0_1 <- J/t(matrix(rep(pi_1,3),3,3))
+colSums(C_0_1)
+
+
+```
