@@ -24,4 +24,13 @@ Keywords:
   * Streaming model
   * [Johnson-Lindenstrauss lemma](https://en.wikipedia.org/wiki/Johnson%E2%80%93Lindenstrauss_lemma)
   * Simulation
-  
+
+## HW-3
+
+For this hw we are required to compare two estimators of the population mean: the sample average and the median-of-means (MoM) both in the univariate and multivariate case with differents type of distributions.
+
+Keywords:
+  * Mean estimators
+  * MoM
+  * Multivariate
+  * Heavy/light tailed dustrubutions

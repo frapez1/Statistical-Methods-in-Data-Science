@@ -1,0 +1,625 @@
+---
+title: "HW3-Sampieri-Pezone"
+output: 
+  html_document:
+    toc: True
+---
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Code for univariate and multivariate {.tabset .tabset-fade .tabset-pills}
+
+```{r,results='hide', message=FALSE, warning=FALSE }
+library(ggridges)
+library(heavy)
+library(ggplot2)
+library(Gmedian)
+library(mvtnorm)
+library(lcmix)
+library("plot3D")
+library(doParallel)
+library(TSdist)
+mean_th_weibull <- function(shape,scale) scale*gamma(1/shape)/shape
+
+
+mom_estimate = function(N, B, D, dist, alpha, cent, VAriance ){
+  # choose the theoretical mu based on the distribution
+
+  if(dist=='normal') {mu_theor <- cent}
+  if(dist=='weibull') {mu_theor <- mean_th_weibull(shape = cent , scale = rep(1, length(cent)) )}
+  if(dist=='crsp') {mu_theor <- cent}
+  # initialize the dataframe
+  df_bias_variance <- data.frame()
+  
+  # loop for differents D, alpha and N
+  for (d in 1:length(D)){
+    for (k in 1:length(alpha)){
+      for (n in 1:length(N)){
+        # value of k from alpha
+        K = floor(8*log(1/alpha[k])) 
+        # number of elements in each block
+        m = floor(N[n]/K)           
+        all_mu_mm <- matrix(0, B, D[d])
+        mean_vec = matrix(0, K, D[d])
+        mu_rand = matrix(0, B, D[d])
+          # simulation
+          for(j in 1:B){
+            #choose the sample from the distribution
+            if(dist=='normal') normale = rmnorm(n = N[n], mean = cent, Sigma = VAriance)
+            if(dist=='weibull' && D==1) normale = rweibull(n=N[n], shape=cent, scale=VAriance)
+            if(dist=='weibull' && D!=1){
+              normale = rmvweisd(n = N[n], shape = cent,  corr  = VAriance)
+            }
+            if(dist=='crsp') normale = crsp[4:7]
+            normale =as.data.frame(normale)
+            # mean
+            mu_rand[j,] = apply(normale,2,mean)
+            # split in k blocks and mean ok each block
+            norm_split=split(normale[sample(1:nrow(normale), replace=F),], rep(1:K, each = m))
+            for(f in 1:K) mean_vec[f,] = apply(as.data.frame(norm_split[f]), 2, mean)
+            # Gmedian of all k blocks
+            all_mu_mm[j,] = Gmedian(mean_vec)#Gmedian(mean_vec) # gmedian 
+          }
+        alll <- as.data.frame(all_mu_mm)
+        
+        # bias variance and mse for MoM
+        varia = sum(apply(alll, 2, var))
+        bs_mom = norm(as.matrix(apply(alll, 2,mean)-mu_theor))
+        mse_mom = varia + bs_mom^2
+        # bias variance and mse for sample mean
+        varia_rand = sum(apply(mu_rand,2,var))
+        bs_rand = norm(as.matrix(apply(mu_rand,2,mean)-mu_theor))
+        mse_rand = varia_rand + bs_rand^2
+        
+        de <- data.frame(D_=D[d], N_=N[n], K_ = K, alpha = alpha[k], 
+                         Bias_mom=bs_mom, 
+                         Variance_mom=varia, Variance_rand = varia_rand, Bias_rand = bs_rand,
+                         MSE_mom = mse_mom, MSE_rand = mse_rand)
+        df_bias_variance <- rbind(df_bias_variance, de)
+        }
+    }
+  }
+    
+    return(df_bias_variance)
+}
+
+## plot curve bias e mse 
+diff_plot = function(result, st, n, d){
+  # select only a given N and D
+  sub.set <- subset(result, D_==d & N_==n)
+  dbv = subset(result, D_==d & N_==n)
+  first = paste(st, '_Mom', sep='')
+  second = paste(st, '_mean', sep='')
+  
+  colors = c('first' = 'red4', 'second'='green')
+  #plot for bias
+  if (st == "bias"){
+    p10 = ggplot(dbv, aes(x = unlist(dbv$alpha),
+                          y = abs(unlist(dbv$Bias_mom)))) + 
+      geom_line(colour='red') + 
+      geom_point(aes(y = abs(unlist(dbv$Bias_mom)),color='first'), size = 4)  +
+      geom_line(aes(y = abs(unlist(abs(dbv$Bias_rand)))),
+                color='lightgreen') +
+      geom_point(aes(y = abs(unlist(abs(dbv$Bias_rand))),
+                     color='second'), size = 4)
+  }
+  # plot for variance
+  if (st == "var"){
+    p10 = ggplot(dbv, aes(x = dbv$alpha,
+                          y = unlist(dbv$Variance_mom))) + 
+      geom_line(colour='red') + 
+      geom_point(aes(y = unlist(dbv$Variance_mom),color='first'), size = 4)  +
+      geom_line(aes(y = unlist(dbv$Variance_rand)),
+                color='lightgreen') +
+      geom_point(aes(y = unlist(dbv$Variance_rand),
+                     color='second'), size = 4)
+  }
+  # plot for mse
+  if (st=="mse"){
+    p10 = ggplot(dbv, aes(x = dbv$alpha,
+                          y = MSE_mom)) + 
+      geom_line(colour='red') + 
+      geom_point(aes(y = MSE_mom, color='first'), size = 4)  +
+      geom_line(aes(y = MSE_rand),
+                color='lightgreen') +
+      geom_point(aes(y = MSE_rand,
+                     color='second'), size = 4) 
+  }
+  
+  
+  
+  p10 + labs(title = 'Difference', x = 'Alpha', y = 'Values', color = 'Legend') +
+    scale_color_manual(name = 'Type', values = colors,
+                       labels=c(first, second))
+}
+
+
+```
+
+```{r,results='hide', message=FALSE, warning=FALSE }
+# mom estimator plot with mse, variance and bias in the same plot
+bv_plot = function(result, N, D){
+  
+  d10 = subset(result, D_==D & N_==num)
+  colors = c('Bias' ="red4", 'Variance'='green','MSE'='blue4')
+  p10 = ggplot(d10, aes(x = alpha, y= abs(Bias_mom)), fill=group) +
+    geom_line(color='red')+
+    geom_point(aes(x =d10$alpha, y= abs(d10$Bias_mom), color='Bias'), size=4) +
+    scale_y_continuous(limits=c(0,(max(d10[5:9])+0.02))) +
+    geom_line(aes(x =d10$alpha,y = d10$Variance_mom),
+              color='lightgreen', size=1.5) +
+    geom_point(aes(x =d10$alpha,y = d10$Variance_mom,
+                   color='Variance'), size=5.5) +
+    geom_line(aes(x =d10$alpha,y = d10$MSE_mom),
+              color = 'blue') +
+    geom_point(aes(x =d10$alpha,y = d10$MSE_mom,
+                   color='MSE'), size =4) +
+    labs(title='MoM estimator', x = 'Alpha', y = 'Values', color='Legend') +
+    scale_color_manual(name = 'Type', values = colors)
+  
+  p10            
+}
+```
+
+# Univariate case {.tabset .tabset-fade .tabset-pills}
+
+What we can see from the graph is that, both in the case of heavy and light tails, the MoM has a greater bias and mse.
+What we can see is that for small Ns, regardless of the type of distribution, the mse is higher. This is due to the fact that the ratio \(\frac{n}{k} = m\) is smaller. M identifies the population of points in a single block of k. Since there are few points then the estimate of the means within each block is not very precise (assuming the variance proportional to \(\frac{1}{m}\)). On the contrary, increasing n inside the block there are more points and the estimate is more precise, therefore the k points are closer to each other.
+
+
+
+## Normal Distribution {.tabset .tabset-fade .tabset-pills}
+
+Let's start with a light-tailed distribution like the Gaussian distribution.
+As N varies, from 100 up to 10000, we can see how, in function of alpha (as alpha increases, k decreases) the bias and variance of the MoM are always above the average.
+As N changes, being all the other parameters fixed, what changes is the number of points in each of the k blocks. In fact, this number is \(\frac{n}{k} \) which tends to grow.
+
+
+### N = 100
+```{r, fig.width=12, fig.height=5, echo=F, warning=F}
+set.seed(1234)
+dim = 1
+cent <- c(0)
+Sigma <- matrix(c(1), ncol=1)
+alpha <- rev(seq(0.01,0.11,0.02))
+num <- 100
+result = mom_estimate(N=num, B=1000, D=dim,
+                      dist='normal', alpha=alpha,
+                      cent=cent,
+                      VAriance = Sigma)
+diff_plot(result, st='bias', n = num, d = dim)
+diff_plot(result, st='var', n = num, d = dim)
+diff_plot(result, st='mse', n = num, d = dim)
+
+bv_plot(result, N = num, D = dim)
+```
+
+### N = 1000
+```{r, fig.width=12, fig.height=5, echo=F, warning=F}
+set.seed(1234)
+dim = 1
+cent <- c(0)
+Sigma <- matrix(c(1), ncol=1)
+alpha <- rev(seq(0.01,0.11,0.02))
+num <- 1000
+result = mom_estimate(N=num, B=1000, D=dim,
+                      dist='normal', alpha=alpha,
+                      cent=cent,
+                      VAriance = Sigma)
+diff_plot(result, st='bias', n = num, d = dim)
+diff_plot(result, st='var', n = num, d = dim)
+diff_plot(result, st='mse', n = num, d = dim)
+bv_plot(result, N = num, D = dim)
+```
+
+### N = 10000
+```{r, fig.width=12, fig.height=5, echo=F, warning=F}
+set.seed(1234)
+dim = 1
+cent <- c(0)
+Sigma <- matrix(c(1), ncol=1)
+alpha <- rev(seq(0.01,0.11,0.02))
+num <- 10000
+result = mom_estimate(N=num, B=1000, D=dim,
+                      dist='normal', alpha=alpha,
+                      cent=cent,
+                      VAriance = Sigma)
+diff_plot(result, st='bias', n = num, d = dim)
+diff_plot(result, st='var', n = num, d = dim)
+diff_plot(result, st='mse', n = num, d = dim)
+bv_plot(result, N = num, D = dim)
+```
+
+
+
+## Weibull Distribution {.tabset .tabset-fade .tabset-pills}
+
+The Weibull distribution that we are going to consider is now a heavy tails, in fact we have that \(shape = 0.7\).
+
+### N = 100
+```{r, fig.width=12, fig.height=5, echo=F, warning=F}
+set.seed(1234)
+dim = 1
+cent <- c(0.7)
+Sigma <- matrix(c(1), ncol=1)
+alpha <- rev(seq(0.01,0.11,0.02))
+num <- 100
+result = mom_estimate(N=num, B=1000, D=dim,
+                      dist='weibull', alpha=alpha,
+                      cent=cent,
+                      VAriance = Sigma)
+diff_plot(result, st='bias', n = num, d = dim)
+diff_plot(result, st='var', n = num, d = dim)
+diff_plot(result, st='mse', n = num, d = dim)
+bv_plot(result, N = num, D = dim)
+```
+
+### N = 1000
+```{r, fig.width=12, fig.height=5, echo=F, warning=F}
+set.seed(1234)
+dim = 1
+cent <- c(0.7)
+Sigma <- matrix(c(1), ncol=1)
+alpha <- rev(seq(0.01,0.11,0.02))
+num <- 1000
+result = mom_estimate(N=num, B=1000, D=dim,
+                      dist='weibull', alpha=alpha,
+                      cent=cent,
+                      VAriance = Sigma)
+diff_plot(result, st='bias', n = num, d = dim)
+diff_plot(result, st='var', n = num, d = dim)
+diff_plot(result, st='mse', n = num, d = dim)
+bv_plot(result, N = num, D = dim)
+```
+
+### N = 10000
+```{r, fig.width=12, fig.height=5, echo=F, warning=F}
+set.seed(1234)
+dim = 1
+cent <- c(0.7)
+Sigma <- matrix(c(1), ncol=1)
+alpha <- rev(seq(0.01,0.11,0.02))
+num <- 10000
+result = mom_estimate(N=num, B=1000, D=dim,
+                      dist='weibull', alpha=alpha,
+                      cent=cent,
+                      VAriance = Sigma)
+diff_plot(result, st='bias', n = num, d = dim)
+diff_plot(result, st='var', n = num, d = dim)
+diff_plot(result, st='mse', n = num, d = dim)
+bv_plot(result, N = num, D = dim)
+```
+
+
+
+
+
+
+# Multivariate case {.tabset .tabset-fade .tabset-pills}
+Now let's see what happens when we increase the number of dimensions. we start from 2, to move to 4 (dataframe size for the last part) and finally 10.
+As we can see, both in the case of light or heavy tails we can see, as can be expected, that the mse, both of the MoM and of the average increase. This is given by the fact that the mse is obtained from the trace of the covariance matrix and from the norm of the bias (there are more terms as the dimensions increase).
+As for the considerations on the k and the \(\frac{n}{k}\) ratio, everything remains as in the univariate case with the only exception that now the situation is even worse for the simulation. As the dimensions increase, more points are needed to carry out a simulation.
+
+## Normal Distribution {.tabset .tabset-fade .tabset-pills}
+
+### D = 2 
+```{r, fig.width=12, fig.height=5, echo=F, warning=F}
+set.seed(1234)
+dim = 2
+num = 10^4
+cent <- rep(0,dim)
+Sigma <- diag(dim)
+alpha <- rev(seq(0.01,0.10,0.02))
+result = mom_estimate(N=num, B=1000, D=dim,
+                      dist='normal', alpha=alpha,
+                      cent=cent,
+                      VAriance = Sigma)
+diff_plot(result, st='bias', n = num, d = dim)
+diff_plot(result, st='var', n = num, d = dim)
+diff_plot(result, st='mse', n = num, d = dim)
+bv_plot(result, N = num, D = dim)
+
+```
+
+
+### D = 4
+```{r, fig.width=12, fig.height=5, echo=F, warning=F}
+set.seed(1234)
+dim = 4
+num = 10^4
+cent <- rep(0,dim)
+Sigma <- diag(dim)
+alpha <- rev(seq(0.01,0.10,0.02))
+result = mom_estimate(N=num, B=1000, D=dim,
+                      dist='normal', alpha=alpha,
+                      cent=cent,
+                      VAriance = Sigma)
+diff_plot(result, st='bias', n = num, d = dim)
+diff_plot(result, st='var', n = num, d = dim)
+diff_plot(result, st='mse', n = num, d = dim)
+bv_plot(result, N = num, D = dim)
+```
+
+### D = 10
+
+```{r, fig.width=12, fig.height=5, echo=F, warning=F}
+set.seed(1234)
+dim = 10
+num = 10^4
+cent <- rep(0,dim)
+Sigma <- diag(dim)
+alpha <- rev(seq(0.01,0.10,0.02))
+result = mom_estimate(N=num, B=1000, D=dim,
+                      dist='normal', alpha=alpha,
+                      cent=cent,
+                      VAriance = Sigma)
+diff_plot(result, st='bias', n = num, d = dim)
+diff_plot(result, st='var', n = num, d = dim)
+diff_plot(result, st='mse', n = num, d = dim)
+bv_plot(result, N = num, D = dim)
+```
+
+
+
+## Weibull Distribution {.tabset .tabset-fade .tabset-pills}
+
+### D = 2 
+```{r, fig.width=12, fig.height=5, echo=F, warning=F}
+set.seed(1234)
+dim = 2
+num = 10^4
+cent <- rep(0.7,dim)
+Sigma <- diag(dim)
+alpha <- rev(seq(0.01,0.10,0.02))
+result = mom_estimate(N=num, B=1000, D=dim,
+                      dist='weibull', alpha=alpha,
+                      cent=cent,
+                      VAriance = Sigma)
+diff_plot(result, st='bias', n = num, d = dim)
+diff_plot(result, st='var', n = num, d = dim)
+diff_plot(result, st='mse', n = num, d = dim)
+bv_plot(result, N = num, D = dim)
+
+```
+
+
+### D = 4
+```{r, fig.width=12, fig.height=5, echo=F, warning=F}
+set.seed(1234)
+dim = 4
+num = 10^4
+cent <- rep(0.7,dim)
+Sigma <- diag(dim)
+alpha <- rev(seq(0.01,0.10,0.02))
+result = mom_estimate(N=num, B=1000, D=dim,
+                      dist='weibull', alpha=alpha,
+                      cent=cent,
+                      VAriance = Sigma)
+diff_plot(result, st='bias', n = num, d = dim)
+diff_plot(result, st='var', n = num, d = dim)
+diff_plot(result, st='mse', n = num, d = dim)
+bv_plot(result, N = num, D = dim)
+```
+
+### D = 10
+
+```{r, fig.width=12, fig.height=5, echo=F, warning=F}
+set.seed(1234)
+dim = 10
+num = 10^4
+cent <- rep(0.7,dim)
+Sigma <- diag(dim)
+alpha <- rev(seq(0.01,0.10,0.02))
+result = mom_estimate(N=num, B=1000, D=dim,
+                      dist='weibull', alpha=alpha,
+                      cent=cent,
+                      VAriance = Sigma)
+diff_plot(result, st='bias', n = num, d = dim)
+diff_plot(result, st='var', n = num, d = dim)
+diff_plot(result, st='mse', n = num, d = dim)
+bv_plot(result, N = num, D = dim)
+```
+
+
+
+
+# CRSPday {.tabset .tabset-fade .tabset-pills}
+Now let's start analyzing our dataframe.
+
+```{r,results='hide', message=FALSE, warning=FALSE}
+library(zoo)
+library(car)
+library(PerformanceAnalytics)
+library(ggplot2)
+library(GGally)
+library(ellipse)
+library(RColorBrewer)
+library(fitdistrplus)
+library(MASS)
+library(ppcor)
+load('C:/Users/franc/Desktop/Data_science/Statistical_Methods_in_Data_Science_and_Laboratory/Homework/hw3/CRSPday.RData')
+crsp = as.data.frame(CRSPday)
+
+# Create new date column
+crsp$date <- as.Date(with(crsp, paste(year, month, day,sep="-")), "%Y-%m-%d")
+dates = crsp$date
+
+```
+
+
+For simplicity of reading we are going to write some functions representing plots of timeseries and histograms.
+
+```{r }
+
+plot_var = function(variable, dates){
+  par(mfrow=c(1,2))
+  plot(zoo(variable,as.Date(dates,"%d/%m/%y")),
+       ylab='Values', xlab='Date',
+       sub='Timeserie', ylim=c(-.1,.1),col='darkseagreen2', font.sub=3)
+  abline(h=c(mean(variable), sd(variable),-sd(variable)),
+         col=c('red',"blue",'blue'), lwd=2, lty=c(1,2,2))
+  
+  hist(variable,prob=T, col='papayawhip', breaks=50,
+       sub='Histogram', xlab='Values', main='', font.sub=3)
+  lines(density(variable), col='orange1',lwd=4)
+  par(mfrow=c(1,1))
+}
+```
+
+## Analysis of the variables individually {.tabset .tabset-fade .tabset-pills}
+
+Let's analyze the behavior of the individual variables.
+For each we report the time series, a histogram, the Cullen and Frey graph (to try to deduce the starting distribution) and the qqplot (to analyze the quantiles by comparing them with a normal distribution).
+Since none of the variables comes close to a generalized extreme value (GEV) distribution (family of distributions which also includes Weibull), the calculation of the Hill's estimator does not add any information. To evaluate the heaviness of the tails we used the Kurtosis value, which if higher than 3 indicates distributions with heavy tails.
+
+### Ge
+
+In the Cullen and Frey graph we can see how the distribution is no known distribution. Some distributions of the bootstraped approach a logistic but are still very different.
+
+```{r echo=F}
+plot_var(crsp$ge, dates)
+par(mfrow=c(1,2))
+descdist(crsp$ge, discrete = FALSE,
+         boot=1000)
+qqPlot(crsp$ge, ylab ='ge', main = 'Q-Q plot')
+par(mfrow=c(1,1))
+```
+
+### Ibm
+In the Cullen and Frey graph we can see how the distribution is no known distribution. The bootstraped version also differs greatly from known distributions.
+
+```{r echo=F}
+plot_var(crsp$ibm, dates)
+par(mfrow=c(1,2))
+descdist(crsp$ibm, discrete = FALSE,
+         boot=1000)
+qqPlot(crsp$ibm,ylab ='ibm', main = 'Q-Q plot')
+par(mfrow=c(1,1))
+```
+
+
+### Mobil
+In the Cullen and Frey graph we can see how the distribution is no known distribution. Some distributions of the bootstraped approach a logistic but are still very different.
+
+```{r echo=F}
+plot_var(crsp$mobil, dates)
+par(mfrow=c(1,2))
+descdist(crsp$mobil, discrete = FALSE,
+         boot=1000)
+qqPlot(crsp$mobil,ylab ='mobil', main = 'Q-Q plot')
+par(mfrow=c(1,1))
+```
+
+
+### Crsp
+In the Cullen and Frey chart we can see how the distribution is unknown. Even the bootstrap version is very poor for the graph, we cannot attribute this data to any known distribution.
+
+```{r echo=F}
+plot_var(crsp$crsp, dates)
+par(mfrow=c(1,2))
+descdist(crsp$crsp, discrete = FALSE,
+         boot=1000)
+qqPlot(crsp$crsp,ylab ='crsp', main = 'Q-Q plot')
+par(mfrow=c(1,1))
+```
+## Joint analysis of variables {.tabset .tabset-fade .tabset-pills}
+
+From the analysis of the single variables we have seen how all the single columns do not distribute themselves as known distributions and how they all have heavy tails, with kurtosis values ranging from 5.41 for ge to 10.66 for crsp.
+Let us evaluate the correlation between the variables. To do this we create a correlation matrix
+
+```{r,fig.width=4, fig.height=4 }
+ggcorr(crsp[4:7],label=T,label_round = 2, label_alpha = TRUE)
+
+```
+
+Given that ge, ibm and mobil are three companies that deal with different sectors, it seems very strange to see such a strong correlation between, for example, ge and ibm. 
+For this we carry out a partial correlation to remove the effects of confounders.
+
+
+```{r, warning=F }
+
+pcor(crsp[4:7], method = 'pearson')$estimate 
+
+```
+
+We can see, even after the partial correlation, that all 3 stocks are still strongly correlated to crsp.
+Since ge and crsp are strongly correlated with each other we go to see the equation that binds these two variables.
+This equation is very important since knowing the market trend it is possible to estimate also the ge trend.
+In addition to the linear fit, the red straight line, we also add the LOWESS, the blue dotted line.
+This is a popular tool used in regression analysis that creates a smooth line through a timeplot or scatter plot to help you to see relationship between variables and foresee trends.
+The two lines are very close so the linear fit is a good fit and describes the relationship well.
+
+```{r }
+ge <- crsp$ge
+plot(ge ~ crsp, data = crsp[4:7], col = 'lightgrey')
+fit  <- lm(ge ~ crsp, data = crsp[4:7]) 
+summary(fit)  
+abline(fit, col = 'red', lwd=2)
+
+fit2 <- lowess(ge ~ crsp$crsp) 
+lines(fit2, col = "blue", lty=2) 
+```
+
+
+## Financial analysis {.tabset .tabset-fade .tabset-pills}
+
+Let's see now the financial trend of the different stocks.
+To do this, we will take the closing prices of the Juniors from yahoo finance to see the percentage trend.
+From the plot you can see how ge had a very high percentage increase compared to other dur stocks.
+Just about ge we can analyze some very interesting data.
+In 1994 GE acquired the Nuovo Pignone company in Florence, deciding to invest in the manufacturing skills and technological and innovative skills of the Italian company first by becoming a majority shareholder and then acquiring its entire share capital.
+In fact in 2004 we can see a strange trend of the curve, an initial peak and then going down and starting to go up again very quickly.
+another very interesting point of the curve is towards the end with a very rapid collapse of the percentage gain.
+In those days in fact (as reported at the following link:
+https://www.quadrantefuturo.it/sectors/petrolio-da-uno-shock-allaltra.html) there was a drop in the price of oil, the sector in which this company works.
+
+```{r,results='hide', message=FALSE, warning=FALSE  }
+library(tseries)
+prices = get.hist.quote("IBM", start = min(dates)-1, end = max(dates)+1, quote = "AdjClose",
+                        compression = "d")
+R.IBM = Return.calculate(prices, method="simple")
+R.IBM = as.xts(R.IBM)
+
+#ge
+prices = get.hist.quote("GE", start = min(dates)-1, end = max(dates)+1, quote = "AdjClose",
+                        compression = "d")
+R.ge = Return.calculate(prices, method="simple")
+R.ge = as.xts(R.ge)
+
+#mobil 
+prices = get.hist.quote("XOM", start = min(dates)-1, end = max(dates)+1, quote = "AdjClose",
+                        compression = "d")
+R.MO = Return.calculate(prices, method="simple")
+R.MO = as.xts(R.MO)
+
+# Plot return
+try=data.frame(R.IBM, R.ge, R.MO)
+chart.CumReturns(try,legend.loc="topleft", main="Cumulative Daily Returns")
+
+```
+
+## MoM estimator CRSPday {.tabset .tabset-fade .tabset-pills}
+
+As we can see from the plots below, and from what we have seen in the multivariate case, the best value of k is the highest one, that is, the one for which alpha is smaller.
+
+```{r, fig.width=12, fig.height=5, echo=F, warning=F}
+set.seed(1234)
+dim = 4
+num = length(crsp[,1])
+cent <- rep(0,dim)
+Sigma <- diag(dim)
+alpha <- rev(seq(0.01,0.10,0.02))
+result = mom_estimate(N=num, B=1000, D=dim,
+                      dist='crsp', alpha=alpha,
+                      cent=cent,
+                      VAriance = Sigma)
+diff_plot(result, st='bias', n = num, d = dim)
+diff_plot(result, st='var', n = num, d = dim)
+diff_plot(result, st='mse', n = num, d = dim)
+bv_plot(result, N = num, D = dim)
+```
+
+
